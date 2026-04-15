@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections import Counter
+import json
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,27 +23,27 @@ FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 
 FACE_ORDER = ["U", "R", "F", "D", "L", "B"]
 FACE_INSTRUCTION = {
-    "U": "Show face with WHITE center",
+    "U": "Show face with YELLOW center",
     "R": "Show face with RED center",
     "F": "Show face with GREEN center",
-    "D": "Show face with YELLOW center",
+    "D": "Show face with WHITE center",
     "L": "Show face with ORANGE center",
     "B": "Show face with BLUE center",
 }
 CENTER_EXPECTED = {
-    "U": "W",
+    "U": "Y",
     "R": "R",
     "F": "G",
-    "D": "Y",
+    "D": "W",
     "L": "O",
     "B": "B",
 }
 
 COLOR_TO_FACE = {
-    "W": "U",
+    "Y": "U",
     "R": "R",
     "G": "F",
-    "Y": "D",
+    "W": "D",
     "O": "L",
     "B": "B",
 }
@@ -51,7 +52,7 @@ COLOR_TO_FACE = {
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], # Since it's a local project, allow everything
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -68,6 +69,14 @@ class FinalizeStateRequest(BaseModel):
 
 @app.get("/")
 def index() -> FileResponse:
+    landing_file = FRONTEND_DIR / "landing.html"
+    if not landing_file.exists():
+        raise HTTPException(status_code=404, detail="Frontend landing.html not found")
+    return FileResponse(str(landing_file))
+
+
+@app.get("/capture")
+def capture_page() -> FileResponse:
     index_file = FRONTEND_DIR / "index.html"
     if not index_file.exists():
         raise HTTPException(status_code=404, detail="Frontend index.html not found")
@@ -84,12 +93,64 @@ def get_capture_order():
 
 
 @app.post("/api/detect-face")
-async def detect_face(file: UploadFile = File(...)):
+async def detect_face(
+    file: UploadFile = File(...),
+    expected_face: str | None = Form(default=None),
+    calibration_json: str | None = Form(default=None),
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing image file name")
+
+    if file.content_type and not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Uploaded file must be an image")
+
     image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded image is empty")
+
+    expected_center = None
+    if expected_face:
+        ef = expected_face.upper().strip()
+        if ef not in CENTER_EXPECTED:
+            raise HTTPException(status_code=400, detail=f"Invalid expected_face '{expected_face}'. Use one of {FACE_ORDER}")
+        expected_center = CENTER_EXPECTED[ef]
+
+    calibration: dict[str, tuple[int, int, int]] | None = None
+    if calibration_json:
+        try:
+            raw = json.loads(calibration_json)
+            if not isinstance(raw, dict):
+                raise ValueError("Calibration must be a JSON object")
+
+            parsed: dict[str, tuple[int, int, int]] = {}
+            for key, value in raw.items():
+                color = str(key).upper().strip()
+                if color not in COLOR_KEYS:
+                    continue
+                if not isinstance(value, list) or len(value) != 3:
+                    continue
+
+                h, s, v = int(value[0]), int(value[1]), int(value[2])
+                h = max(0, min(179, h))
+                s = max(0, min(255, s))
+                v = max(0, min(255, v))
+                parsed[color] = (h, s, v)
+
+            if parsed:
+                calibration = parsed
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid calibration_json: {str(exc)}") from exc
+
     try:
-        detected = detect_face_from_image_bytes(image_bytes)
+        detected = detect_face_from_image_bytes(
+            image_bytes,
+            expected_center=expected_center,
+            calibration=calibration,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Face detection failed: {str(exc)}") from exc
 
     return as_debug_dict(detected)
 

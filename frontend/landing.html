@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rubik's Cube Solver</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="landing-bg-orb orb-a"></div>
+    <div class="landing-bg-orb orb-b"></div>
+
+    <header class="landing-topbar">
+      <div class="landing-brand">
+        <span class="brand-dot"></span>
+        <span>Rubik's Cube Solver</span>
+      </div>
+      <nav class="landing-nav">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="/capture" class="mini-cta">Open Camera</a>
+      </nav>
+    </header>
+
+    <main class="landing-shell">
+      <section class="hero-grid">
+        <article class="hero-left">
+          <p class="landing-tag">OpenCV • FastAPI • Kociemba</p>
+          <h1>Scan your cube.<br />Fix colors.<br />Solve confidently.</h1>
+          <p class="landing-subtitle">
+            A clean, accurate cube workflow: capture each face, correct wrong stickers,
+            validate solvability, and proceed to guided solving.
+          </p>
+
+          <div class="landing-actions">
+            <a class="landing-btn primary" href="/capture">Open Camera</a>
+            <button class="landing-btn secondary" type="button" disabled>Compete Mode (Coming Soon)</button>
+          </div>
+
+          <div class="landing-points" id="features">
+            <span>⚡ Real-time camera capture</span>
+            <span>🎯 Manual sticker correction</span>
+            <span>🧠 Kociemba validation</span>
+            <span>📱 Fully responsive UI</span>
+          </div>
+        </article>
+
+        <aside class="hero-right" aria-label="Preview">
+          <div class="showcase-card">
+            <div class="showcase-head">
+              <div class="showcase-dots"><span></span><span></span><span></span></div>
+              <span>Live Capture Preview</span>
+            </div>
+
+            <div class="cube-mock">
+              <div class="cube-row">
+                <i style="background:#f8fafc"></i><i style="background:#22c55e"></i><i style="background:#f97316"></i>
+              </div>
+              <div class="cube-row">
+                <i style="background:#3b82f6"></i><i style="background:#f8fafc"></i><i style="background:#ef4444"></i>
+              </div>
+              <div class="cube-row">
+                <i style="background:#facc15"></i><i style="background:#22c55e"></i><i style="background:#3b82f6"></i>
+              </div>
+            </div>
+
+            <div class="showcase-metrics" id="how">
+              <div>
+                <strong>Step 1</strong>
+                <p>Capture face in overlay grid</p>
+              </div>
+              <div>
+                <strong>Step 2</strong>
+                <p>Fix any misdetected colors</p>
+              </div>
+              <div>
+                <strong>Step 3</strong>
+                <p>Validate solvability and continue</p>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </body>
+</html>

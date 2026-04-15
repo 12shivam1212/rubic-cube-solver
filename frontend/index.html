@@ -8,21 +8,35 @@
   </head>
   <body>
     <header class="topbar">
-      <h1>Rubik's Cube Capture (OpenCV)</h1>
-      <p>Capture all 6 faces, validate state, then solve later.</p>
+      <div>
+        <h1>Rubik's Cube Capture (OpenCV)</h1>
+        <p>Capture all 6 faces, validate state, then solve later.</p>
+      </div>
+      <div class="topbar-actions">
+        <a class="top-link" href="/">Home</a>
+      </div>
     </header>
 
     <main class="layout">
       <section class="capture-panel">
+        <div id="progressFaces" class="progress-faces"></div>
+
         <div class="instruction-box">
           <div id="stepText">Press Start Camera</div>
           <div id="statusText" class="status">Idle</div>
           <div class="status">Tip: Cube face must be centered inside overlay. In Captured Faces, click any sticker to correct color.</div>
+
+          <div id="orientationGuide" class="orientation-guide"></div>
         </div>
 
         <div class="camera-wrap">
           <video id="video" autoplay playsinline muted></video>
-          <div class="overlay-grid" aria-hidden="true"></div>
+          <div class="overlay-grid" aria-hidden="true">
+            <span id="edgeTop" class="edge-ref top"></span>
+            <span id="edgeRight" class="edge-ref right"></span>
+            <span id="edgeBottom" class="edge-ref bottom"></span>
+            <span id="edgeLeft" class="edge-ref left"></span>
+          </div>
         </div>
 
         <canvas id="snapshotCanvas" width="640" height="480" hidden></canvas>
@@ -38,6 +52,13 @@
       <aside class="preview-panel">
         <h2>Captured Faces</h2>
         <div id="facesContainer" class="faces-container"></div>
+
+        <div class="correction-panel">
+          <h3>Manual Correction</h3>
+          <p id="correctionHelp" class="muted">Click any sticker in Captured Faces to edit it.</p>
+          <div id="colorPicker" class="color-picker"></div>
+        </div>
+
         <div id="resultBox" class="result-box"></div>
       </aside>
     </main>
