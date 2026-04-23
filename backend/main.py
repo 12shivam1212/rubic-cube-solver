@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from itertools import product
 import json
 from pathlib import Path
 
@@ -180,6 +181,49 @@ def _build_kociemba_state(faces: dict[str, list[str]]) -> str:
     return "".join(COLOR_TO_FACE[c] for c in colors)
 
 
+def _rotate_face_clockwise(face: list[str]) -> list[str]:
+    # 3x3 clockwise rotation (row-major index mapping).
+    # [0 1 2      [6 3 0
+    #  3 4 5  ->   7 4 1
+    #  6 7 8]      8 5 2]
+    return [face[6], face[3], face[0], face[7], face[4], face[1], face[8], face[5], face[2]]
+
+
+def _rotate_face_n(face: list[str], times: int) -> list[str]:
+    out = face[:]
+    for _ in range(times % 4):
+        out = _rotate_face_clockwise(out)
+    return out
+
+
+def _try_resolve_with_face_rotations(
+    faces: dict[str, list[str]],
+) -> tuple[bool, dict[str, list[str]] | None, str | None, dict[str, int] | None, str | None]:
+    """
+    Try all per-face 0/90/180/270 rotations to fix capture orientation ambiguity.
+    Returns:
+    (found, resolved_faces, solution, rotation_map, error)
+    """
+    originals = {k: v[:] for k, v in faces.items()}
+
+    # 4^6 = 4096 combinations; feasible for this workflow.
+    for turns in product(range(4), repeat=len(FACE_ORDER)):
+        rotated: dict[str, list[str]] = {}
+        rotation_map: dict[str, int] = {}
+
+        for idx, face_name in enumerate(FACE_ORDER):
+            t = turns[idx]
+            rotated[face_name] = _rotate_face_n(originals[face_name], t)
+            rotation_map[face_name] = t
+
+        state = _build_kociemba_state(rotated)
+        solvable, solution, err = is_solvable_state(state)
+        if solvable:
+            return True, rotated, solution, rotation_map, None
+
+    return False, None, None, None, "No valid orientation found from captured faces"
+
+
 @app.post("/api/finalize-state")
 def finalize_state(payload: FinalizeStateRequest):
     ok, error = _validate_face_payload(payload.faces)
@@ -198,12 +242,31 @@ def finalize_state(payload: FinalizeStateRequest):
     state = _build_kociemba_state(payload.faces)
     solvable, solution, solve_error = is_solvable_state(state)
 
+    # If invalid, attempt automatic orientation recovery by rotating captured faces.
+    resolved_by_rotation = False
+    rotation_map = None
+    resolved_state = state
+    resolved_faces = payload.faces
+    if not solvable:
+        found, fixed_faces, fixed_solution, fixed_rotations, _ = _try_resolve_with_face_rotations(payload.faces)
+        if found and fixed_faces is not None and fixed_solution is not None and fixed_rotations is not None:
+            resolved_by_rotation = True
+            resolved_faces = fixed_faces
+            resolved_state = _build_kociemba_state(fixed_faces)
+            solution = fixed_solution
+            solve_error = None
+            solvable = True
+            rotation_map = fixed_rotations
+
     return {
-        "cube_state": state,
+        "cube_state": resolved_state,
         "is_valid": True,
         "is_solvable": solvable,
         "solution": solution,
         "error": solve_error,
+        "resolved_by_rotation": resolved_by_rotation,
+        "rotation_turns_clockwise": rotation_map,
+        "faces_used": resolved_faces,
     }
 
 if __name__ == "__main__":

@@ -205,6 +205,7 @@ body {
   display: block;
   object-fit: cover;
   background: #000;
+  transition: transform 0.2s ease;
 }
 
 .overlay-grid {
@@ -325,9 +326,54 @@ button:disabled {
   background: #166246;
 }
 
+#flipBtn {
+  background: #3a2c5a;
+  border-color: #58438a;
+}
+
+#flipBtn:hover:not(:disabled) {
+  background: #4b3773;
+}
+
+#autogridBtn {
+  background: #1d4c62;
+  border-color: #2d7596;
+}
+
+#autogridBtn:hover:not(:disabled) {
+  background: #23607e;
+}
+
 #finalizeBtn {
   background: #20406b;
   border-color: #2d5a95;
+}
+
+#demoBtn {
+  background: #4b3a16;
+  border-color: #7b5d22;
+}
+
+#demoBtn:hover:not(:disabled) {
+  background: #61491b;
+}
+
+#demoScrambleBtn {
+  background: #23421f;
+  border-color: #3e7440;
+}
+
+#demoScrambleBtn:hover:not(:disabled) {
+  background: #2d5528;
+}
+
+#clearBtn {
+  background: #3a1f2a;
+  border-color: #6b3248;
+}
+
+#clearBtn:hover:not(:disabled) {
+  background: #512a39;
 }
 
 .faces-container {
@@ -379,6 +425,35 @@ button:disabled {
   background: rgba(15, 24, 43, 0.8);
 }
 
+.solution-wrap {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.twisty {
+  width: min(100%, 460px);
+  height: 320px;
+  border: 1px solid #3b4f73;
+  border-radius: 10px;
+  background: rgba(9, 15, 28, 0.7);
+}
+
+.move-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.move-pill {
+  border: 1px solid #425a84;
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 0.78rem;
+  color: #d4e3ff;
+  background: rgba(43, 65, 106, 0.4);
+}
+
 .correction-panel {
   margin-top: 12px;
   border: 1px solid #334867;
@@ -427,6 +502,11 @@ button:disabled {
 
 .bad {
   color: var(--danger);
+}
+
+.warn {
+  color: #fbbf24;
+  margin-bottom: 8px;
 }
 
 @media (max-width: 960px) {

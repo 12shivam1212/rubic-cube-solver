@@ -31,6 +31,7 @@
 
         <div class="camera-wrap">
           <video id="video" autoplay playsinline muted></video>
+
           <div class="overlay-grid" aria-hidden="true">
             <span id="edgeTop" class="edge-ref top"></span>
             <span id="edgeRight" class="edge-ref right"></span>
@@ -43,10 +44,17 @@
 
         <div class="actions">
           <button id="startBtn">Start Camera</button>
+          <button id="flipBtn" type="button" disabled>Flip Video: OFF</button>
+          <button id="autogridBtn" type="button">AutoGrid: ON</button>
           <button id="captureBtn" disabled>Capture Face (or press any key)</button>
           <button id="retakeBtn" disabled>Retake Current Face</button>
           <button id="finalizeBtn" disabled>Validate Cube State</button>
+          <button id="demoBtn" type="button">Load Demo Input</button>
+          <button id="demoScrambleBtn" type="button">Load Demo Scrambled</button>
+          <button id="clearBtn" type="button">Clear Input</button>
         </div>
+
+        <div id="autogridInfo" class="status">AutoGrid enabled: backend will locate the 3×3 face automatically.</div>
       </section>
 
       <aside class="preview-panel">
@@ -63,6 +71,7 @@
       </aside>
     </main>
 
+    <script type="module" src="https://cdn.cubing.net/js/cubing/twisty"></script>
     <script src="/static/app.js" defer></script>
   </body>
 </html>

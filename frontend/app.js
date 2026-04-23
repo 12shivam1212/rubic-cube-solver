@@ -46,9 +46,15 @@ const progressFaces = document.getElementById("progressFaces");
 const orientationGuide = document.getElementById("orientationGuide");
 
 const startBtn = document.getElementById("startBtn");
+const flipBtn = document.getElementById("flipBtn");
+const autogridBtn = document.getElementById("autogridBtn");
 const captureBtn = document.getElementById("captureBtn");
 const retakeBtn = document.getElementById("retakeBtn");
 const finalizeBtn = document.getElementById("finalizeBtn");
+const demoBtn = document.getElementById("demoBtn");
+const demoScrambleBtn = document.getElementById("demoScrambleBtn");
+const clearBtn = document.getElementById("clearBtn");
+const autogridInfo = document.getElementById("autogridInfo");
 
 let stream = null;
 let currentFaceIndex = 0;
@@ -56,6 +62,8 @@ let faces = {}; // { U:[9], R:[9], ... }
 let isBusy = false;
 let selectedSticker = null; // { faceKey, index }
 let colorCalibration = {}; // { W:[h,s,v], R:[h,s,v], ... }
+let isVideoFlipped = false;
+let isAutogridEnabled = true;
 
 const FACE_CENTER_COLOR = { U: "Y", R: "R", F: "G", D: "W", L: "O", B: "B" };
 
@@ -236,12 +244,179 @@ function renderFacePreviews() {
   });
 }
 
+function renderSolutionViewer(solution, cubeState) {
+  const moves = solution.trim().split(/\s+/).filter(Boolean);
+  const movePills = moves
+    .map((m, idx) => `<span class="move-pill">${idx + 1}. ${m}</span>`)
+    .join("");
+
+  const twistySupported = typeof customElements !== "undefined" && customElements.get("twisty-player");
+
+  resultBox.innerHTML = `
+    <div class="good"><strong>Cube is valid and solvable.</strong></div>
+    <div>Cube state: <code>${cubeState}</code></div>
+    <div>Solution: <code>${solution}</code></div>
+    <div class="solution-wrap">
+      ${
+        twistySupported
+          ? `<twisty-player
+               class="twisty"
+               puzzle="3x3x3"
+               alg="${solution}"
+               background="none"
+               control-panel="bottom-row"
+               tempo-scale="1.1"
+             ></twisty-player>`
+          : `<div class="bad">3D player unavailable in this browser/network. Showing move list only.</div>`
+      }
+      <div class="move-list">${movePills || "<span class=\"muted\">No moves returned.</span>"}</div>
+    </div>
+  `;
+}
+
+function renderRotationRecoveryInfo(data) {
+  if (!data?.resolved_by_rotation || !data?.rotation_turns_clockwise) return "";
+
+  const entries = Object.entries(data.rotation_turns_clockwise)
+    .map(([face, turns]) => `${face}: ${turns * 90}°`)
+    .join(" • ");
+
+  return `<div class="warn"><strong>Auto orientation fix applied:</strong> ${entries}</div>`;
+}
+
 function updateButtons() {
   const started = !!stream;
   startBtn.disabled = started;
+  if (flipBtn) flipBtn.disabled = !started || isBusy;
+  if (autogridBtn) autogridBtn.disabled = isBusy;
   captureBtn.disabled = !started || currentFaceIndex >= FACE_ORDER.length || isBusy;
   retakeBtn.disabled = !started || currentFaceIndex === 0 || isBusy;
   finalizeBtn.disabled = currentFaceIndex < FACE_ORDER.length || isBusy;
+  if (demoBtn) demoBtn.disabled = isBusy;
+  if (demoScrambleBtn) demoScrambleBtn.disabled = isBusy;
+  if (clearBtn) clearBtn.disabled = isBusy;
+}
+
+function updateAutogridButton() {
+  if (!autogridBtn) return;
+  autogridBtn.textContent = `AutoGrid: ${isAutogridEnabled ? "ON" : "OFF"}`;
+}
+
+function renderAutogridInfo(meta = null) {
+  if (!autogridInfo) return;
+
+  if (!meta) {
+    autogridInfo.textContent = isAutogridEnabled
+      ? "AutoGrid enabled: backend will locate the 3×3 face automatically."
+      : "AutoGrid disabled: capture uses fixed center overlay crop.";
+    autogridInfo.className = "status";
+    return;
+  }
+
+  const mode = meta.mode || "unknown";
+  const conf = typeof meta.confidence === "number" ? ` (conf ${meta.confidence.toFixed(2)})` : "";
+  const fallback = meta.fallback_used ? " • fallback used" : "";
+  const reason = meta.reason ? ` • ${meta.reason}` : "";
+  autogridInfo.textContent = `Detector: ${mode}${conf}${fallback}${reason}`;
+  autogridInfo.className = `status ${meta.fallback_used ? "warn" : "good"}`;
+}
+
+function applyVideoFlip() {
+  if (!video) return;
+  video.style.transform = isVideoFlipped ? "scaleX(-1)" : "none";
+  if (flipBtn) {
+    flipBtn.textContent = `Flip Video: ${isVideoFlipped ? "ON" : "OFF"}`;
+  }
+}
+
+function toggleVideoFlip() {
+  if (!stream || isBusy) return;
+  isVideoFlipped = !isVideoFlipped;
+  applyVideoFlip();
+  setStatus(`Video flip ${isVideoFlipped ? "enabled" : "disabled"}.`, "good");
+}
+
+function toggleAutogrid() {
+  if (isBusy) return;
+  isAutogridEnabled = !isAutogridEnabled;
+  updateAutogridButton();
+  renderAutogridInfo();
+  setStatus(
+    isAutogridEnabled
+      ? "AutoGrid enabled. You no longer need perfect manual alignment."
+      : "AutoGrid disabled. Use overlay alignment as before.",
+    "good"
+  );
+}
+
+function loadDemoInput() {
+  if (isBusy) return;
+
+  // Standard solved orientation used by this app:
+  // U=Y, R=R, F=G, D=W, L=O, B=B
+  faces = {
+    U: ["Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"],
+    R: ["R", "R", "R", "R", "R", "R", "R", "R", "R"],
+    F: ["G", "G", "G", "G", "G", "G", "G", "G", "G"],
+    D: ["W", "W", "W", "W", "W", "W", "W", "W", "W"],
+    L: ["O", "O", "O", "O", "O", "O", "O", "O", "O"],
+    B: ["B", "B", "B", "B", "B", "B", "B", "B", "B"],
+  };
+
+  currentFaceIndex = FACE_ORDER.length;
+  selectedSticker = null;
+  colorCalibration = {};
+
+  renderFacePreviews();
+  updateCorrectionHelp();
+  renderColorPicker();
+  updateStepInstruction();
+  updateButtons();
+  resultBox.innerHTML = "";
+  setStatus("Demo input loaded. Click Validate Cube State.", "good");
+}
+
+function loadDemoScrambledInput() {
+  if (isBusy) return;
+
+  // Valid solvable state = solved cube after a single U turn.
+  // Orientation used by this app: U=Y, R=R, F=G, D=W, L=O, B=B
+  faces = {
+    U: ["Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"],
+    R: ["G", "G", "G", "R", "R", "R", "R", "R", "R"],
+    F: ["O", "O", "O", "G", "G", "G", "G", "G", "G"],
+    D: ["W", "W", "W", "W", "W", "W", "W", "W", "W"],
+    L: ["B", "B", "B", "O", "O", "O", "O", "O", "O"],
+    B: ["R", "R", "R", "B", "B", "B", "B", "B", "B"],
+  };
+
+  currentFaceIndex = FACE_ORDER.length;
+  selectedSticker = null;
+  colorCalibration = {};
+
+  renderFacePreviews();
+  updateCorrectionHelp();
+  renderColorPicker();
+  updateStepInstruction();
+  updateButtons();
+  resultBox.innerHTML = "";
+  setStatus("Demo scrambled input loaded. Click Validate Cube State.", "good");
+}
+
+function clearAllInput() {
+  if (isBusy) return;
+  faces = {};
+  currentFaceIndex = 0;
+  selectedSticker = null;
+  colorCalibration = {};
+
+  renderFacePreviews();
+  updateCorrectionHelp();
+  renderColorPicker();
+  updateStepInstruction();
+  updateButtons();
+  resultBox.innerHTML = "";
+  setStatus("Input cleared. Start capture again.");
 }
 
 async function startCamera() {
@@ -255,6 +430,8 @@ async function startCamera() {
         video.onloadedmetadata = () => resolve();
       }
     });
+    isVideoFlipped = false;
+    applyVideoFlip();
     setStatus("Camera started. Keep one face centered inside white square and fill most of it.");
     updateButtons();
     updateStepInstruction();
@@ -305,7 +482,17 @@ function getSnapshotBlob() {
   const ow = overlayRect.width;
   const oh = overlayRect.height;
 
-  const sx = Math.max(0, Math.round(srcX + (ox / containerW) * srcW));
+  // If preview is flipped, map overlay X back to source coordinates accordingly.
+  const mappedOx = isVideoFlipped ? containerW - (ox + ow) : ox;
+
+  if (isAutogridEnabled) {
+    canvas.width = Math.max(1, Math.round(srcW));
+    canvas.height = Math.max(1, Math.round(srcH));
+    ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, canvas.width, canvas.height);
+    return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.95));
+  }
+
+  const sx = Math.max(0, Math.round(srcX + (mappedOx / containerW) * srcW));
   const sy = Math.max(0, Math.round(srcY + (oy / containerH) * srcH));
   const sw = Math.max(1, Math.round((ow / containerW) * srcW));
   const sh = Math.max(1, Math.round((oh / containerH) * srcH));
@@ -347,6 +534,7 @@ async function captureCurrentFace() {
 
     const grid = data.grid;
     if (!Array.isArray(grid) || grid.length !== 9) throw new Error("Invalid detection payload");
+    renderAutogridInfo(data.autogrid || null);
 
     faces[faceKey] = grid;
 
@@ -413,16 +601,17 @@ async function finalizeState() {
     if (!res.ok) throw new Error(data.detail || "Validation failed");
 
     if (data.is_solvable) {
-      resultBox.innerHTML = `
-        <div class="good"><strong>Cube is valid and solvable.</strong></div>
-        <div>Cube state: <code>${data.cube_state}</code></div>
-        <div>Preview solution (phase-2 will guide moves): <code>${data.solution}</code></div>
-      `;
+      renderSolutionViewer(data.solution, data.cube_state);
+      const extra = renderRotationRecoveryInfo(data);
+      if (extra) {
+        resultBox.innerHTML = `${extra}${resultBox.innerHTML}`;
+      }
       setStatus("Validation complete.", "good");
     } else {
       resultBox.innerHTML = `
         <div class="bad"><strong>Cube is NOT solvable.</strong></div>
         <div>Reason: ${data.error || "Unknown"}</div>
+        <div class="muted">Try recapturing with side references aligned, or correct stickers manually.</div>
       `;
       setStatus("Validation complete: unsolvable.", "bad");
     }
@@ -436,9 +625,14 @@ async function finalizeState() {
 }
 
 startBtn.addEventListener("click", startCamera);
+if (flipBtn) flipBtn.addEventListener("click", toggleVideoFlip);
+if (autogridBtn) autogridBtn.addEventListener("click", toggleAutogrid);
 captureBtn.addEventListener("click", captureCurrentFace);
 retakeBtn.addEventListener("click", retakePrevious);
 finalizeBtn.addEventListener("click", finalizeState);
+if (demoBtn) demoBtn.addEventListener("click", loadDemoInput);
+if (demoScrambleBtn) demoScrambleBtn.addEventListener("click", loadDemoScrambledInput);
+if (clearBtn) clearBtn.addEventListener("click", clearAllInput);
 
 window.addEventListener("keydown", (event) => {
   if (!stream) return;
@@ -454,3 +648,5 @@ updateCorrectionHelp();
 renderColorPicker();
 renderProgressFaces();
 renderOverlayReferences(currentFaceKey());
+updateAutogridButton();
+renderAutogridInfo();

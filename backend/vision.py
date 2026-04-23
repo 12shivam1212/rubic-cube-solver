@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Any
 
 import cv2
@@ -20,12 +21,21 @@ HSV_PROTOTYPES: dict[str, tuple[int, int, int]] = {
     "B": (110, 200, 180),
 }
 
+AUTOGRID_MODE = os.getenv("AUTOGRID_MODE", "hybrid").strip().lower()
+AUTOGRID_YOLO_MODEL = os.getenv("AUTOGRID_YOLO_MODEL", "")
+AUTOGRID_YOLO_CONF = float(os.getenv("AUTOGRID_YOLO_CONF", "0.35"))
+AUTOGRID_WARP_SIZE = int(os.getenv("AUTOGRID_WARP_SIZE", "360"))
+
+_YOLO_MODEL = None
+_YOLO_LOAD_ERROR: str | None = None
+
 
 @dataclass
 class DetectionResult:
     grid: list[str]  # 9 letters in row-major order
     confidence: list[float]
     roi: dict[str, int]
+    autogrid: dict[str, Any] | None = None
     center_corrected: bool = False
     expected_center: str | None = None
     center_hsv: list[int] | None = None
@@ -57,6 +67,198 @@ def _largest_center_square(image: np.ndarray) -> tuple[np.ndarray, dict[str, int
     x = (w - side) // 2
     y = (h - side) // 2
     return image[y : y + side, x : x + side], {"x": x, "y": y, "size": side}
+
+
+def _order_quad_points(pts: np.ndarray) -> np.ndarray:
+    """Return points ordered as top-left, top-right, bottom-right, bottom-left."""
+    pts = pts.astype(np.float32)
+    s = pts.sum(axis=1)
+    diff = np.diff(pts, axis=1).reshape(-1)
+
+    tl = pts[np.argmin(s)]
+    br = pts[np.argmax(s)]
+    tr = pts[np.argmin(diff)]
+    bl = pts[np.argmax(diff)]
+    return np.array([tl, tr, br, bl], dtype=np.float32)
+
+
+def _warp_from_quad(image: np.ndarray, quad: np.ndarray, size: int = AUTOGRID_WARP_SIZE) -> np.ndarray:
+    ordered = _order_quad_points(quad)
+    dst = np.array(
+        [[0, 0], [size - 1, 0], [size - 1, size - 1], [0, size - 1]],
+        dtype=np.float32,
+    )
+    matrix = cv2.getPerspectiveTransform(ordered, dst)
+    return cv2.warpPerspective(image, matrix, (size, size), flags=cv2.INTER_LINEAR)
+
+
+def _load_yolo_model():
+    global _YOLO_MODEL, _YOLO_LOAD_ERROR
+    if _YOLO_MODEL is not None:
+        return _YOLO_MODEL
+    if _YOLO_LOAD_ERROR:
+        return None
+    if not AUTOGRID_YOLO_MODEL:
+        _YOLO_LOAD_ERROR = "AUTOGRID_YOLO_MODEL is not set"
+        return None
+    if not os.path.exists(AUTOGRID_YOLO_MODEL):
+        _YOLO_LOAD_ERROR = f"YOLO model file not found: {AUTOGRID_YOLO_MODEL}"
+        return None
+
+    try:
+        from ultralytics import YOLO  # type: ignore
+
+        _YOLO_MODEL = YOLO(AUTOGRID_YOLO_MODEL)
+        return _YOLO_MODEL
+    except Exception as exc:
+        _YOLO_LOAD_ERROR = str(exc)
+        return None
+
+
+def _autogrid_with_yolo(image: np.ndarray) -> tuple[np.ndarray, dict[str, Any]] | None:
+    model = _load_yolo_model()
+    if model is None:
+        return None
+
+    try:
+        results = model.predict(source=image, conf=AUTOGRID_YOLO_CONF, max_det=1, verbose=False)
+    except Exception:
+        return None
+
+    if not results:
+        return None
+
+    r0 = results[0]
+    if getattr(r0, "boxes", None) is None or len(r0.boxes) == 0:
+        return None
+
+    box = r0.boxes[0]
+    conf = float(box.conf.item()) if getattr(box, "conf", None) is not None else 0.0
+    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(np.float32).tolist()
+    quad = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.float32)
+    warped = _warp_from_quad(image, quad)
+
+    return warped, {
+        "used": True,
+        "mode": "yolo",
+        "confidence": round(conf, 4),
+        "quad": [[int(p[0]), int(p[1])] for p in quad],
+        "fallback_used": False,
+    }
+
+
+def _autogrid_with_classic(image: np.ndarray) -> tuple[np.ndarray, dict[str, Any]] | None:
+    h, w = image.shape[:2]
+    image_area = float(h * w)
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    edges = cv2.Canny(gray, 70, 180)
+    edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=1)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8), iterations=1)
+
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    best_quad = None
+    best_score = -1e18
+
+    cx_img, cy_img = w / 2.0, h / 2.0
+
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < image_area * 0.04:
+            continue
+
+        peri = cv2.arcLength(cnt, True)
+        approx = cv2.approxPolyDP(cnt, 0.03 * peri, True)
+
+        if len(approx) == 4 and cv2.isContourConvex(approx):
+            quad = approx.reshape(4, 2).astype(np.float32)
+        else:
+            rect = cv2.minAreaRect(cnt)
+            rw, rh = rect[1]
+            if rw < 20 or rh < 20:
+                continue
+            quad = cv2.boxPoints(rect).astype(np.float32)
+
+        ordered = _order_quad_points(quad)
+        top_w = np.linalg.norm(ordered[1] - ordered[0])
+        bot_w = np.linalg.norm(ordered[2] - ordered[3])
+        left_h = np.linalg.norm(ordered[3] - ordered[0])
+        right_h = np.linalg.norm(ordered[2] - ordered[1])
+
+        width = (top_w + bot_w) * 0.5
+        height = (left_h + right_h) * 0.5
+        if width < 20 or height < 20:
+            continue
+
+        aspect = max(width, height) / max(1.0, min(width, height))
+        if aspect > 1.9:
+            continue
+
+        c = np.mean(ordered, axis=0)
+        center_dist = np.linalg.norm(c - np.array([cx_img, cy_img], dtype=np.float32))
+
+        area_norm = area / max(1.0, image_area)
+        score = (area_norm * 1000.0) - (center_dist * 0.35) - ((aspect - 1.0) * 120.0)
+
+        if score > best_score:
+            best_score = score
+            best_quad = ordered
+
+    if best_quad is None:
+        return None
+
+    warped = _warp_from_quad(image, best_quad)
+    area_est = cv2.contourArea(best_quad.reshape(-1, 1, 2))
+    confidence = float(max(0.45, min(0.95, (area_est / max(1.0, image_area)) * 2.2)))
+
+    return warped, {
+        "used": True,
+        "mode": "classic",
+        "confidence": round(confidence, 4),
+        "quad": [[int(p[0]), int(p[1])] for p in best_quad],
+        "fallback_used": False,
+    }
+
+
+def _autogrid_extract_face(image: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
+    mode = AUTOGRID_MODE if AUTOGRID_MODE in {"yolo", "classic", "hybrid"} else "hybrid"
+
+    if mode in {"yolo", "hybrid"}:
+        yolo_out = _autogrid_with_yolo(image)
+        if yolo_out is not None:
+            return yolo_out
+        if mode == "yolo":
+            fallback_img, fallback_roi = _largest_center_square(image)
+            return fallback_img, {
+                "used": False,
+                "mode": "fallback-center-square",
+                "confidence": 0.0,
+                "quad": None,
+                "fallback_used": True,
+                "reason": _YOLO_LOAD_ERROR or "YOLO detection failed",
+                "roi": fallback_roi,
+            }
+
+    if mode in {"classic", "hybrid"}:
+        classic_out = _autogrid_with_classic(image)
+        if classic_out is not None:
+            return classic_out
+
+    fallback_img, fallback_roi = _largest_center_square(image)
+    return fallback_img, {
+        "used": False,
+        "mode": "fallback-center-square",
+        "confidence": 0.0,
+        "quad": None,
+        "fallback_used": True,
+        "reason": "Classic autogrid failed",
+        "roi": fallback_roi,
+    }
 
 
 def _circular_hue_mean(h_values: np.ndarray) -> int:
@@ -181,8 +383,12 @@ def detect_face_from_image_bytes(
 
     bgr = _gray_world_white_balance(bgr)
 
-    # Frontend sends overlay-cropped image; ensure square only.
-    roi_bgr, roi_meta = _largest_center_square(bgr)
+    roi_bgr, autogrid_meta = _autogrid_extract_face(bgr)
+    roi_meta = (
+        autogrid_meta.get("roi")
+        if isinstance(autogrid_meta, dict) and autogrid_meta.get("roi")
+        else {"x": 0, "y": 0, "size": int(min(roi_bgr.shape[0], roi_bgr.shape[1]))}
+    )
     if roi_bgr.shape[0] < 90 or roi_bgr.shape[1] < 90:
         raise ValueError("Captured ROI is too small. Move closer and recapture.")
 
@@ -236,6 +442,7 @@ def detect_face_from_image_bytes(
         grid=grid,
         confidence=confidence,
         roi=roi_meta,
+        autogrid=autogrid_meta,
         center_corrected=center_corrected,
         expected_center=expected_center,
         center_hsv=list(cell_hsv[4]) if len(cell_hsv) >= 5 else None,
@@ -256,6 +463,7 @@ def as_debug_dict(result: DetectionResult) -> dict[str, Any]:
         "grid_2d": make_color_grid_payload(result.grid),
         "confidence": result.confidence,
         "roi": result.roi,
+        "autogrid": result.autogrid,
         "center_corrected": result.center_corrected,
         "expected_center": result.expected_center,
         "center_hsv": result.center_hsv,
